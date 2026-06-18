@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>地球が何回回った日？ - 音声回答・自動判定版 -</title>
+    <style>
+        /* 視覚障害（弱視）の方向けの高コントラストデザイン（黒背景に白文字） */
+        body { 
+            font-family: 'Helvetica Neue', Arial, sans-serif; 
+            text-align: center; 
+            padding: 40px 20px; 
+            background-color: #000000; 
+            color: #ffffff; 
+        }
+        h1 { 
+            color: #5cd65c; /* 目立つ明るい緑 */
+            font-size: 32px; 
+            margin-bottom: 5px; 
+        }
+        .subtitle { 
+            font-size: 18px; 
+            color: #cccccc; 
+            margin-bottom: 40px; 
+        }
+        p, div {
+            font-size: 24px; 
+            line-height: 1.8;
+        }
+        button { 
+            font-size: 28px; 
+            font-weight: bold;
+            padding: 25px 50px; 
+            margin: 30px; 
+            cursor: pointer; 
+            border: 4px solid #ffffff; 
+            border-radius: 12px; 
+            background: #111111; 
+            color: #ffffff; 
+            transition: 0.2s; 
+        }
+        button:hover, button:focus { 
+            background: #ffffff; 
+            color: #000000; 
+            outline: none;
+        }
+        .hidden { display: none; }
+        #liveSpeech { 
+            font-size: 32px; color: #ff9800; font-weight: bold; 
+            margin: 30px; padding: 15px; border: 2px dashed #444; min-height: 50px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>地球が何回<br>回った日？</h1>
+    <div class="subtitle">〜 How many times did the Earth spin? 〜</div>
+
+    <div id="startArea">
+        <p style="color: #5cd65c; font-size: 28px; font-weight: bold;">
+            【画面をどこでもクリックするか、キーを押すとスタートするのだ！】
+        </p>
+        <p style="font-size: 18px; color: #aaa; margin-top: 20px;">
+            ※マイクの許可を求められたら「許可」を押してください。
+        </p>
+    </div>
+
+    <div id="gameArea" class="hidden">
+        <p id="gameStatusText" style="color: #5cd65c; font-size: 32px; font-weight: bold;">ずんだもんが準備中なのだ…</p>
+        <p id="gameSubText">案内音声を再生しているのだ。</p>
+    </div>
+
+    <div id="answerArea" class="hidden">
+        <p style="color: #5cd65c; font-size: 32px; font-weight: bold;">🎤 あなたの番なのだ！声に出して答えるのだ！</p>
+        <p>「〇回目の、〇〇！」のようにマイクに向かって喋ってください。</p>
+        
+        <div id="liveSpeech">（あなたの声をお留守番中…）</div>
+
+        <button id="retryBtn" class="hidden" style="border-color: #ff9800; color: #ff9800; font-size: 20px; padding: 15px 30px;">最初からもう一度遊ぶ</button>
+    </div>
+
+    <script>
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        // 音声バッファの保管庫
+        const buffers = {
+            title: null,
+            intro: null,
+            start: null,
+            q1: null,
+            stopSignal: null,
+            seikai: null,
+            hazure: null
+        };
+
+        let audioSource = null;
+        let isStarted = false;       
+        const targetTime = 30.0;     // ターゲット時間（30秒）
+        const totalPlayTime = 52000; // クイズ音声を流す全体の時間（ミリ秒）
+
+        // 正解計算用の変数
+        let correctLoops = 0;
+        let correctLetter = "";
+
+        // 早口言葉の文字配列（マサチューセッツ州観光庁なのだ）
+        const phraseLetters = ["ま", "さ", "ちゅ", "ー", "せ", "っ", "つ", "しゅ", "う", "か", "ん", "こ", "う", "ちょ", "う", "な", "の", "だ"];
+
+        // 音声認識（Web Speech API）の準備
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        let recognition = null;
+        let hasJudged = false; // すでに判定したかどうかのフラグ
+
+        if (SpeechRecognition) {
+            recognition = new SpeechRecognition();
+            recognition.continuous = true;     // 喋り続けても止めない
+            recognition.interimResults = true; // 途中の言葉もリアルタイムに拾う
+            recognition.lang = 'ja-JP';        // 日本語
+
+            recognition.onresult = (event) => {
+                if (hasJudged) return; // すでに判定が終わっていれば無視
+
+                let currentText = "";
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    currentText += event.results[i][0].transcript;
+                }
+                
+                document.getElementById('liveSpeech').innerText = currentText;
+
+                // プレイヤーが喋り終わった（確定した）ら自動判定システムへ
+                if (event.results[event.results.length - 1].isFinal) {
+                    judgeVoiceAnswer(currentText);
+                }
+            };
+        }
+
+        // --- 音声ファイルの一括ロード ---
+        async function loadAudioFile(key, url) {
+            try {
+                const response = await fetch(url);
+                const arrayBuffer = await response.arrayBuffer();
+                buffers[key] = await audioCtx.decodeAudioData(arrayBuffer);
+                console.log(`音声を読み込みました: ${key}`);
+            } catch (error) {
+                console.error(`音声の読み込みに失敗しました: ${key}`, error);
+            }
+        }
+
+        async function loadAllAllFiles() {
+            await loadAudioFile('title', 'zundamon_title.wav');
+            await loadAudioFile('intro', 'zundamon_intro.wav');
+            await loadAudioFile('start', 'zundamon_start.wav');
+            await loadAudioFile('q1', 'zundamon_q1.wav');
+            await loadAudioFile('stopSignal', 'zundamon_stop30.wa.wav');
+            await loadAudioFile('seikai', 'zundamon_seikai.wav');
+            await loadAudioFile('hazure', 'zundamon_hazure.wav');
+            console.log("すべてのずんだもんボイスの準備が整ったのだ！");
+        }
+
+        window.addEventListener('DOMContentLoaded', loadAllAllFiles);
+
+        function playSound(buffer, callback) {
+            if (!buffer) return;
+            const source = audioCtx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioCtx.destination);
+            if (callback) source.onended = callback;
+            source.start();
+            return source;
+        }
+
+        function speakGuide(text) {
+            window.speechSynthesis.cancel();
+            const uttr = new SpeechSynthesisUtterance(text);
+            uttr.lang = 'ja-JP';
+            uttr.rate = 1.1;
+            window.speechSynthesis.speak(uttr);
+        }
+
+        // --- 自動連動の進行ロジック ---
+        const startArea = document.getElementById('startArea');
+        const gameArea = document.getElementById('gameArea');
+        const answerArea = document.getElementById('answerArea');
+        const gameStatusText = document.getElementById('gameStatusText');
+        const gameSubText = document.getElementById('gameSubText');
+        const retryBtn = document.getElementById('retryBtn');
+
+        window.addEventListener('click', startTrigger);
+        window.addEventListener('keydown', startTrigger);
+
+        function startTrigger() {
+            if (isStarted) return; 
+            if (!buffers.title || !buffers.intro || !buffers.start || !buffers.q1 || !buffers.stopSignal) return;
+
+            isStarted = true;
+            hasJudged = false;
+            audioCtx.resume();
+
+            startArea.classList.add('hidden');
+            gameArea.classList.remove('hidden');
+
+            gameStatusText.innerText = "タイトルコール中なのだ…";
+            
+            // 1. タイトル再生
+            playSound(buffers.title, () => {
+                // 2. ルール説明再生
+                gameStatusText.innerText = "ルール説明中なのだ…";
+                playSound(buffers.intro, () => {
+                    // 3. スタート合図再生
+                    gameStatusText.innerText = "まもなくスタートなのだ！";
+                    playSound(buffers.start, () => {
+                        
+                        // 4. クイズの早口言葉ループを再生開始！
+                        gameStatusText.innerText = "ずんだもん熱唱中なのだ！";
+                        gameSubText.innerText = "心の中で30秒を数えるのだ。50秒ほどで自動停止します。";
+                        
+                        audioSource = audioCtx.createBufferSource();
+                        audioSource.buffer = buffers.q1;
+                        audioSource.loop = true;
+                        audioSource.connect(audioCtx.destination);
+                        audioSource.start();
+
+                        // 正解の計算を裏で同時に行う
+                        const duration = buffers.q1.duration;
+                        correctLoops = Math.floor(targetTime / duration) + 1;
+                        const timeInCurrentLoop = targetTime % duration;
+                        const progressRatio = timeInCurrentLoop / duration;
+                        const letterIndex = Math.floor(progressRatio * phraseLetters.length);
+                        correctLetter = phraseLetters[letterIndex];
+
+                        // 5. 52秒後に自動停止して掛け声を鳴らす
+                        setTimeout(() => {
+                            if (audioSource) audioSource.stop();
+                            
+                            gameStatusText.innerText = "タイムアップなのだ！";
+                            playSound(buffers.stopSignal, () => {
+                                // 掛け声が終わったら回答ステージへ
+                                goToAnswerStage();
+                            });
+                        }, totalPlayTime);
+                    });
+                });
+            });
+        }
+
+        // 音声ストップ後の回答案内（ここでマイクを起動）
+        function goToAnswerStage() {
+            gameArea.classList.add('hidden');
+            answerArea.classList.remove('hidden');
+            retryBtn.classList.add('hidden');
+            document.getElementById('liveSpeech').innerText = "（声を聴き取り中なのだ…喋ってください！）";
+
+            // 🎤 マイク聞き取りスタート！
+            if (recognition) {
+                try { recognition.start(); } catch(e){}
+            }
+        }
+
+        // 🌟 プレイヤーの声を解析して自動判定するハイテクシステム！
+        function judgeVoiceAnswer(playerSpeech) {
+            hasJudged = true;
+            if (recognition) recognition.stop(); // 判定するのでマイクは止める
+
+            console.log("プレイヤーの回答テキスト: ", playerSpeech);
+
+            // 数字の判定用の辞書（「4回」「四回」「よんかい」などに対応）
+            const kanjiNumbers = ["零","一","二","三","四","五","六","七","八","九","十"];
+            const matchNumber = playerSpeech.match(/\d+/); // 文字列から半角数字を取り出す
+            
+            let detectedLoop = 0;
+            if (matchNumber) {
+                detectedLoop = parseInt(matchNumber[0]);
+            } else {
+                // 漢数字で認識された場合のフォロー
+                kanjiNumbers.forEach((kanji, idx) => {
+                    if (playerSpeech.includes(kanji)) detectedLoop = idx;
+                });
+                // ひらがな読みのフォロー
+                if (playerSpeech.includes("いち")) detectedLoop = 1;
+                if (playerSpeech.includes("に")) detectedLoop = 2;
+                if (playerSpeech.includes("さん")) detectedLoop = 3;
+                if (playerSpeech.includes("よん") || playerSpeech.includes("し")) detectedLoop = 4;
+                if (playerSpeech.includes("ご")) detectedLoop = 5;
+            }
+
+            // 正解の文字が含まれているかチェック（例：正解が「ちゅ」なら、発言に「ちゅ」か「つ」があればおまけで拾う）
+            const hasLetter = playerSpeech.includes(correctLetter) || 
+                              (correctLetter === "ちゅ" && playerSpeech.includes("つ")) ||
+                              (correctLetter === "しゅ" && playerSpeech.includes("す"));
+
+            // 判定結果の照合（ループ回数と文字が両方一致したか）
+            const isCorrect = (detectedLoop === correctLoops) && hasLetter;
+
+            if (isCorrect) {
+                // ⭕ 完全正解！ seikai.wav を流すなのだ
+                playSound(buffers.seikai, () => {
+                    const resultText = `素晴らしいなのだ！あなたの言った通り、30秒の瞬間は ${correctLoops} 回目のフレーズの、「 ${correctLetter} 」のタイミングでした！大正解！`;
+                    speakGuide(resultText);
+                    showRetryButton();
+                });
+            } else {
+                // ❌ 不正解… hazure.wav を流すなのだ
+                playSound(buffers.hazure, () => {
+                    let failReason = `正解は ${correctLoops} 回目の「 ${correctLetter} 」のタイミングでした！`;
+                    if (detectedLoop > 0) {
+                        failReason += ` あなたの回答は ${detectedLoop} 回目と聞こえたなのだ。`;
+                    }
+                    failReason += " 惜しかったなのだ、もう一回挑戦してみるのだ！";
+                    speakGuide(failReason);
+                    showRetryButton();
+                });
+            }
+        }
+
+        function showRetryButton() {
+            retryBtn.classList.remove('hidden');
+            retryBtn.focus();
+        }
+
+        // リトライ
+        retryBtn.addEventListener('click', () => {
+            window.speechSynthesis.cancel();
+            answerArea.classList.add('hidden');
+            startArea.classList.remove('hidden');
+            isStarted = false;
+            speakGuide("タイトルに戻りました。画面をもう一度クリックするか、キーを押すと自動で最初から始まります。");
+        });
+    </script>
+</body>
+</html>
